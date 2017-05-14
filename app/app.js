@@ -3,11 +3,10 @@
 // THREE stuff
 var scene, camera, renderer;
 var lastRenderTime = 0;
-var cube;
+var water, cube;
 
 // VR stuff
 var vrButton, vrDisplay, vrControls, vrEffect;
-
 
 function getLight(){
     
@@ -22,7 +21,7 @@ function getCamera(){
     
     var aspect = window.innerWidth / window.innerHeight;
     
-    var camera = new THREE.PerspectiveCamera(75, aspect, 0.1, 10000);
+    var camera = new THREE.PerspectiveCamera(75, aspect, 0.1, 100000);
     
     return camera;
 }
@@ -31,7 +30,9 @@ function addVrControls(){
     
     vrControls = new THREE.VRControls(camera);
     vrControls.standing = true;
-    camera.position.y = vrControls.userHeight;
+    //camera.position.y = vrControls.userHeight;
+    camera.position.y=1000;
+    camera.rotation.x=-0.2;
 }
 
 function addVrEffect(){
@@ -81,49 +82,81 @@ function addVr(){
     addVrButton();
 }
 
-function rgbToElevation(rgb, offset, step){
+function getSkybox(){
+
+    var cubeMap = new THREE.CubeTexture( [] );
+    cubeMap.format = THREE.RGBFormat;    
     
-    return (rgb - offset) * step;
+    var loader = new THREE.ImageLoader();
+    
+    loader.load( 'img/skybox.png', function ( image ) {
+
+        var getSide = function ( x, y ) {
+            
+            var size = 1024;
+            
+            var canvas = document.createElement( 'canvas' );
+            canvas.width = size;
+            canvas.height = size;
+            
+            var context = canvas.getContext( '2d' );
+            context.drawImage( image, - x * size, - y * size );
+            
+            return canvas;
+        };
+        
+        cubeMap.images[ 0 ] = getSide( 2, 1 ); // px
+        cubeMap.images[ 1 ] = getSide( 0, 1 ); // nx
+        cubeMap.images[ 2 ] = getSide( 1, 0 ); // py
+        cubeMap.images[ 3 ] = getSide( 1, 2 ); // ny
+        cubeMap.images[ 4 ] = getSide( 1, 1 ); // pz
+        cubeMap.images[ 5 ] = getSide( 3, 1 ); // nz
+        cubeMap.needsUpdate = true;
+    });
+    
+    var cubeShader = THREE.ShaderLib[ 'cube' ];
+    cubeShader.uniforms[ 'tCube' ].value = cubeMap;
+
+    var skyBoxMaterial = new THREE.ShaderMaterial( {
+      fragmentShader: cubeShader.fragmentShader,
+      vertexShader: cubeShader.vertexShader,
+      uniforms: cubeShader.uniforms,
+      depthWrite: false,
+      side: THREE.BackSide
+    } );
+
+    var skyBox = new THREE.Mesh(
+      new THREE.BoxGeometry( 100000, 100000, 100000 ),
+      skyBoxMaterial
+    );
+
+    skyBox.position.y= -10;
+    skyBox.position.z= -10;
+    
+    return skyBox;
 }
 
-function getTerrain(){
+function getOcean(){
     
-    // Create a plane with y based on image declared in dom
-    var img = document.getElementById("landscape-image");
-    var canvas = document.getElementById("canvas");
+    var waterNormals = new THREE.ImageUtils.loadTexture( 'img/water-normals.jpg' );
     
-    canvas.width = img.width;
-    canvas.height = img.height;
-    canvas.getContext('2d').drawImage(img, 0, 0, img.width, img.height);
+    waterNormals.wrapS = waterNormals.wrapT = THREE.RepeatWrapping;
     
-    var data = canvas.getContext('2d').getImageData(0,0, img.height, img.width).data;
+    water = new THREE.Water( renderer, camera, scene, {
+      waterNormals: waterNormals,
+      waterColor: 0x1F4F4F,
+    } );
 
-    var heightStep = -0.2; // A 10 decrease in avg RGB corresponds with one 1 increase in elevation
-    var offset = 160; // Average RGB = 160 should correspond to zero elevation
-    var planeGeometry = new THREE.PlaneGeometry(500, 500, 499, 499);
+    var mirrorMesh = new THREE.Mesh(
+      new THREE.PlaneBufferGeometry(100000, 100000 ),
+      water.material
+    );
+
+    mirrorMesh.add( water );
+    mirrorMesh.rotation.x = - Math.PI * 0.5;
+    mirrorMesh.position.y = -10;
     
-    for (var i = 0, n = data.length; i < n; i += 4) {
-        
-        var avgRgb = (data[i] + data[i+1] + data[i+2]) / 3
-        
-        var elevation = rgbToElevation(avgRgb, offset, heightStep);
-        
-        planeGeometry.vertices[i/4].z = planeGeometry.vertices[i/4].z + (elevation);
-    }
-    
-    // so the shading according to the light-source is correct.
-    planeGeometry.computeFaceNormals();
-    planeGeometry.computeVertexNormals();
-    
-    var planeMaterial = new THREE.MeshPhongMaterial( { color: 0x0000ff} );
-    
-    var plane = new THREE.Mesh(planeGeometry, planeMaterial);
-    
-    plane.material.side = THREE.DoubleSide;
-    plane.rotation.x = THREE.Math.degToRad(-90); // Rotating a mesh rotates the axes along with it.
-    plane.position.set(0, -2, 0); // So positional transformations need to take this into account.
-    
-    return plane;
+    return mirrorMesh;
 }
 
 function getCube(){
@@ -176,7 +209,10 @@ function init(){
     
     scene.add(camera);
     
-    scene.add(getTerrain());
+    scene.add(getSkybox());
+    
+    scene.add(getOcean());
+    
     cube = getCube();
     scene.add(cube);
     
@@ -193,6 +229,9 @@ function animate(timestamp) {
     
     // Apply rotation to cube mesh
     cube.rotation.y += delta * 0.0006;
+    
+    water.material.uniforms.time.value += 1.0 / 40.0;
+    water.render();
     
     // Only update controls if we're presenting.
     if (vrButton.isPresenting()) 
